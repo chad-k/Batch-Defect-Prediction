@@ -3,7 +3,10 @@
 Anomaly Detection + SPC Engine (Variable n incl. n=1) with MANUAL column selection
 + Machine parameters / numeric trace fields aggregated per group
 + Help section + tooltips
-+ Fixed contamination rate (0.10) disclaimer
++ Fixed IsolationForest settings:
+    - contamination = 0.10
+    - n_estimators = 300
++ Robust CSV handling for "numeric" fields that may be strings/booleans
 
 IMPORTANT:
 - st.set_page_config() must be the FIRST Streamlit command and only called once.
@@ -65,11 +68,12 @@ It then computes:
   - UCLxᵢ/LCLxᵢ = X̄̄ ± 3·σ_within/√nᵢ  
 - **S chart limits** use B3/B4 factors (computed via a c4 approximation) for n ≥ 2.
 
-### Fixed contamination disclaimer (Anomaly model)
-We use **IsolationForest with a fixed contamination rate of 0.10** (10%).  
-This means the model will label roughly the **top ~10% most unusual groups** as “⚠️ Anomaly” *relative to the rest of the dataset*.  
-It does **NOT** mean “10% are defective” or “10% are out of spec.”  
-The **ranking/anomaly score** is usually the most useful output; the “Anomaly Flag” is simply a thresholded label.
+### Fixed anomaly model disclaimer
+This app uses **IsolationForest with fixed settings**:
+- **contamination = 0.10** (about the most unusual ~10% of groups will be labeled “⚠️ Anomaly”)
+- **n_estimators = 300** (fixed, not user-controlled)
+
+This is a **review threshold**, not a defect/OOS rate.
 """
     )
 
@@ -79,6 +83,9 @@ The **ranking/anomaly score** is usually the most useful output; the “Anomaly 
 # ----------------------------
 @st.cache_data(show_spinner=False)
 def read_csv(file) -> pd.DataFrame:
+    # If you ever see “first upload works weird”, uncomment the next two lines:
+    # file.seek(0)
+    # return pd.read_csv(file)
     return pd.read_csv(file)
 
 def safe_to_datetime(s: pd.Series) -> pd.Series:
@@ -182,10 +189,9 @@ def agg_numeric_features(
     Handles:
       - numeric-looking strings
       - boolean columns
-      - duplicate column names
+      - duplicate column names (df[c] -> DataFrame)
       - all-NaN columns
     """
-
     base = pd.DataFrame({"Group": pd.Index(gkey.unique()).astype(str)})
     if not num_cols:
         return base
@@ -194,24 +200,17 @@ def agg_numeric_features(
     gdf["_g"] = gkey.astype(str)
 
     for c in num_cols:
-
         col = gdf[c]
-
-        # If duplicate column names exist, pandas returns DataFrame; take first column
-        if isinstance(col, pd.DataFrame):
+        if isinstance(col, pd.DataFrame):  # duplicate column names
             col = col.iloc[:, 0]
 
-        # Force numeric (booleans become 0/1 automatically)
+        # Force numeric (booleans become 0/1, strings become NaN if not parseable)
         s = pd.to_numeric(col, errors="coerce").astype(float)
 
         gg = s.groupby(gdf["_g"], dropna=False)
-
         stats = gg.agg(["mean", "std", "min", "max"])
         stats["std"] = stats["std"].fillna(0.0)
-
-        # Ensure numeric dtype (prevents boolean subtraction issue)
-        stats = stats.astype(float)
-
+        stats = stats.astype(float)  # ensures min/max numeric
         stats["range"] = stats["max"] - stats["min"]
 
         stats = stats.rename(columns={
@@ -220,11 +219,9 @@ def agg_numeric_features(
             "min": f"{c}__min",
             "max": f"{c}__max",
             "range": f"{c}__range",
-        })
+        }).reset_index().rename(columns={"_g": "Group"})
 
-        stats = stats.reset_index().rename(columns={"_g": "Group"})
         stats["Group"] = stats["Group"].astype(str)
-
         base = base.merge(stats, on="Group", how="left")
 
     # Optional: last value per group
@@ -237,10 +234,8 @@ def agg_numeric_features(
             col = gdf2[c]
             if isinstance(col, pd.DataFrame):
                 col = col.iloc[:, 0]
-
             s = pd.to_numeric(col, errors="coerce").astype(float)
             last = s.groupby(gdf2["_g"], dropna=False).last()
-
             base = base.merge(
                 last.rename(f"{c}__last").reset_index().rename(columns={"_g": "Group"}),
                 on="Group",
@@ -248,6 +243,7 @@ def agg_numeric_features(
             )
 
     return base
+
 
 # ----------------------------
 # Sidebar: Data source
@@ -261,13 +257,17 @@ mode = st.sidebar.radio(
 )
 
 if mode == "Upload CSV":
-    uploaded = st.sidebar.file_uploader("Upload CSV", type=["csv"], help="Upload a CSV file. Column names can be anything—you will map them below.")
+    uploaded = st.sidebar.file_uploader(
+        "Upload CSV",
+        type=["csv"],
+        help="Upload a CSV file. Column names can be anything—you will map them below."
+    )
     if not uploaded:
         st.info("Upload a CSV to continue.")
         st.stop()
     df = read_csv(uploaded)
 else:
-    # Demo data (works with wide member columns)
+    # Demo data (wide member columns + process params + categories)
     rng = np.random.default_rng(42)
     demo = []
     for b in range(1, 301):
@@ -285,10 +285,12 @@ else:
                 "Temp": float(np.round(rng.normal(200, 3), 2)),
                 "Pressure": float(np.round(rng.normal(5.0, 0.4), 3)),
                 "Speed": float(np.round(rng.normal(100, 6), 2)),
+                "AlarmActive": bool(rng.random() < 0.05),  # boolean trace example
             }
             for j in range(1, 9):
                 rec[f"Sample{j}"] = float(np.round(rng.normal(base, 0.006), 4)) if j <= n else np.nan
             demo.append(rec)
+
     df = pd.DataFrame(demo)
 
 st.subheader("Raw data preview")
@@ -341,25 +343,22 @@ layout = st.sidebar.radio(
     )
 )
 
-numeric_candidates = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-if not numeric_candidates:
-    st.error("No numeric columns detected. Ensure your measurement columns are numeric.")
-    st.stop()
-
+# Candidates: all columns (not auto-detecting by dtype for measurement; user picks)
+# But we still need to provide choices. We'll show ALL columns; conversion happens later.
 if layout == "Long (one measurement column)":
     meas_col = st.sidebar.selectbox(
         "Measurement column",
-        options=numeric_candidates,
+        options=all_cols,
         index=0,
-        help="This single numeric column is your measurement (e.g., Thickness, Weight). Subgroup size n = number of rows per group with a value."
+        help="Select the measurement column for subgroup values. It can be named anything. We'll coerce it to numeric."
     )
     member_cols = []
 else:
     member_cols = st.sidebar.multiselect(
         "Member columns (subgroup readings)",
-        options=numeric_candidates,
-        default=numeric_candidates[:5],
-        help="Select the columns that contain subgroup members (e.g., Sample1..SampleN, Cav1..CavN). All non-null values are pooled per group."
+        options=all_cols,
+        default=all_cols[:5] if len(all_cols) >= 5 else all_cols,
+        help="Select the columns that contain subgroup members (e.g., Sample1..SampleN, Cav1..CavN). We'll coerce them to numeric."
     )
     if not member_cols:
         st.error("Select at least one subgroup member column.")
@@ -367,39 +366,42 @@ else:
     meas_col = None
 
 # ----------------------------
-# Machine parameters / trace fields (numeric) for anomaly model
+# Machine parameters / trace fields for anomaly model
 # ----------------------------
 st.sidebar.header("Machine parameters / Trace fields")
-st.sidebar.caption("Select numeric process parameters to help anomaly detection (Temp, Pressure, Speed, Setpoints, etc.).")
+st.sidebar.caption("Select numeric-ish process parameters/traces (Temp, Pressure, Speed, Setpoints, Alarm flags, etc.). We'll coerce to numeric.")
 
 exclude = set(member_cols)
 if meas_col is not None:
     exclude.add(meas_col)
+exclude.add(group_col)
+if time_col is not None:
+    exclude.add(time_col)
 
-param_candidates = [c for c in numeric_candidates if c not in exclude]
+param_candidates = [c for c in all_cols if c not in exclude]
 param_cols = st.sidebar.multiselect(
-    "Numeric parameter/trace columns",
+    "Parameter/trace columns (coerced to numeric)",
     options=param_candidates,
-    default=param_candidates,
-    help="These numeric fields will be aggregated per group (mean/std/min/max/range)."
+    default=[],
+    help="These will be aggregated per group (mean/std/min/max/range + optional last). Non-numeric values become NaN."
 )
 
 include_last = st.sidebar.checkbox(
     "Include last value per group (requires Timestamp)",
     value=False,
-    help="Adds param__last per group using the last value by timestamp. Useful for setpoint-like traces."
+    help="Adds param__last per group using the last value by timestamp."
 )
 
 # ----------------------------
 # Categorical context (optional)
 # ----------------------------
 st.sidebar.header("Categorical context (optional)")
-cat_candidates = [c for c in df.columns if c not in {group_col, (time_col or "")} and df[c].dtype == "object"]
+cat_candidates = [c for c in all_cols if c not in {group_col, (time_col or "")}]
 context_cats = st.sidebar.multiselect(
     "Categorical context columns",
     options=cat_candidates,
-    default=cat_candidates[:3],
-    help="Optional context like Machine/Operator/Shift. We use the mode (most common value) within each group."
+    default=[],
+    help="Optional context like Machine/Operator/Shift. We'll use the mode (most common value) within each group."
 )
 
 # ----------------------------
@@ -539,33 +541,52 @@ num_agg = agg_numeric_features(
 )
 feat = feat.merge(num_agg, on="Group", how="left")
 
-# categorical context mode per group
+# categorical context mode per group (as object/category)
 if context_cats:
     tmp = pd.DataFrame({"Group": pd.Index(gkey.unique()).astype(str)})
     gdf = df.copy()
     gdf["_g"] = gkey.astype(str)
     for c in context_cats:
-        mode_series = gdf.groupby("_g", dropna=False)[c].agg(lambda s: s.mode().iloc[0] if len(s.mode()) else None)
-        tmp = tmp.merge(mode_series.rename(c).reset_index().rename(columns={"_g": "Group"}), on="Group", how="left")
+        mode_series = gdf.groupby("_g", dropna=False)[c].agg(
+            lambda s_: s_.mode().iloc[0] if len(s_.mode()) else None
+        )
+        tmp = tmp.merge(
+            mode_series.rename(c).reset_index().rename(columns={"_g": "Group"}),
+            on="Group",
+            how="left",
+        )
     feat = feat.merge(tmp, on="Group", how="left")
 
 # ----------------------------
-# Anomaly model (IsolationForest) - FIXED contamination = 0.10
+# Anomaly model (IsolationForest) - FIXED settings
 # ----------------------------
 st.sidebar.header("Anomaly Model")
-st.sidebar.caption("Disclaimer: anomaly flag threshold uses a fixed contamination rate.")
 st.sidebar.info(
-    "Fixed contamination is set to **0.10** (10%). Roughly the most unusual ~10% of groups will be labeled as ⚠️ Anomaly. "
+    "Fixed IsolationForest settings:\n"
+    "- contamination = 0.10 (about ~10% of groups labeled as ⚠️ Anomaly)\n"
+    "- n_estimators = 300\n\n"
     "This is a review threshold, not a defect rate."
 )
 
-contamination = 0.10  # fixed to match your mislabel detection setup
-# Fixed trees (same idea as mislabel detection: not user-controlled)
+contamination = 0.10
 n_estimators = 300
+
+X_anom = feat.drop(columns=["Group"]).copy()
+
+cat_cols = X_anom.select_dtypes(include=["object", "category"]).columns.tolist()
+num_cols = [c for c in X_anom.columns if c not in cat_cols]
+
+preprocess = ColumnTransformer(
+    transformers=[
+        ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols),
+        ("num", "passthrough", num_cols),
+    ],
+    remainder="drop"
+)
 
 iso = IsolationForest(
     n_estimators=n_estimators,
-    contamination=float(contamination),  # already fixed at 0.10 in your version
+    contamination=contamination,
     random_state=42,
 )
 
@@ -599,7 +620,7 @@ st.write(
 - **Subgroup mapping:** {meas_desc}
 - **Variable subgroup sizes supported (including n=1)**
 - **SPC:** Xbar–S with dynamic limits per group (limits scale with √n)
-- **Anomaly detection:** IsolationForest on group features + selected parameters/traces (fixed contamination = 0.10)
+- **Anomaly detection:** IsolationForest on group features + selected parameters/traces (fixed contamination=0.10, trees=300)
 """
 )
 
@@ -728,12 +749,16 @@ with right:
     show_cols = [group_col]
     if time_col is not None:
         show_cols.append(time_col)
+
+    # context, measurement cols, param cols
     show_cols += context_cats
     if layout == "Long (one measurement column)":
         show_cols.append(meas_col)
     else:
         show_cols += member_cols
     show_cols += param_cols
-    show_cols = [c for c in show_cols if c in df.columns]
-    st.dataframe(df[df[group_col].astype(str) == str(chosen)][show_cols], use_container_width=True)
 
+    # keep only existing columns, preserve order
+    show_cols = [c for c in show_cols if c in df.columns]
+
+    st.dataframe(df[df[group_col].astype(str) == str(chosen)][show_cols], use_container_width=True)
