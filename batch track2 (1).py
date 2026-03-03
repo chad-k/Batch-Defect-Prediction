@@ -433,7 +433,10 @@ if context_cats:
 # Anomaly model (IsolationForest)
 # ----------------------------
 st.sidebar.header("Anomaly Model")
-contamination = st.sidebar.slider("Expected anomalous groups (%)", 1, 30, 10, 1) / 100.0
+
+# Fixed contamination rate (same as mislabel detection)
+contamination = 0.10
+
 n_estimators = st.sidebar.slider("IsolationForest trees", 50, 600, 300, 50)
 
 X_anom = feat.drop(columns=["Group"]).copy()
@@ -603,3 +606,4 @@ with right:
     show_cols += param_cols
     show_cols = [c for c in show_cols if c in df.columns]
     st.dataframe(df[df[group_col].astype(str) == str(chosen)][show_cols], use_container_width=True)
+
