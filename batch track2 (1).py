@@ -560,27 +560,12 @@ st.sidebar.info(
 )
 
 contamination = 0.10  # fixed to match your mislabel detection setup
-n_estimators = st.sidebar.slider(
-    "IsolationForest trees",
-    50, 600, 300, 50,
-    help="More trees can stabilize the anomaly ranking (slower but often smoother)."
-)
-
-X_anom = feat.drop(columns=["Group"]).copy()
-cat_cols = X_anom.select_dtypes(include=["object", "category"]).columns.tolist()
-num_cols = [c for c in X_anom.columns if c not in cat_cols]
-
-preprocess = ColumnTransformer(
-    transformers=[
-        ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols),
-        ("num", "passthrough", num_cols),
-    ],
-    remainder="drop"
-)
+# Fixed trees (same idea as mislabel detection: not user-controlled)
+n_estimators = 300
 
 iso = IsolationForest(
-    n_estimators=int(n_estimators),
-    contamination=float(contamination),
+    n_estimators=n_estimators,
+    contamination=float(contamination),  # already fixed at 0.10 in your version
     random_state=42,
 )
 
@@ -751,3 +736,4 @@ with right:
     show_cols += param_cols
     show_cols = [c for c in show_cols if c in df.columns]
     st.dataframe(df[df[group_col].astype(str) == str(chosen)][show_cols], use_container_width=True)
+
