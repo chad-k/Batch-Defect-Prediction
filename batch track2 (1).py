@@ -637,21 +637,21 @@ st.sidebar.info(
 )
 
 # Allow manual override
-override_contamination = st.sidebar.checkbox(
-    "Override contamination rate?",
-    value=False,
-    help="Enable this if you want to manually adjust the automatically-detected contamination rate."
-)
-if override_contamination:
-    optimal_contamination = st.sidebar.slider(
-        "Manual contamination rate",
-        min_value=0.02,
-        max_value=0.30,
-        value=optimal_contamination,
-        step=0.01,
-        format="%.2f",
-        help="Set the percentage of groups to flag as anomalies (2-30%). Lower = stricter, Higher = more sensitive."
-    )
+#override_contamination = st.sidebar.checkbox(
+#    "Override contamination rate?",
+#    value=False,
+#    help="Enable this if you want to manually adjust the automatically-detected contamination rate."
+#)
+#if override_contamination:
+#    optimal_contamination = st.sidebar.slider(
+#        "Manual contamination rate",
+#        min_value=0.02,
+#        max_value=0.30,
+#        value=optimal_contamination,
+#        step=0.01,
+#        format="%.2f",
+#        help="Set the percentage of groups to flag as anomalies (2-30%). Lower = stricter, Higher = more sensitive."
+#    )
 
 # REFIT with optimal contamination
 iso_final = IsolationForest(n_estimators=300, contamination=optimal_contamination, random_state=42)
@@ -846,3 +846,4 @@ with right:
     show_cols = [c for c in show_cols if c in df.columns]
 
     st.dataframe(df[df[group_col].astype(str) == str(chosen)][show_cols], use_container_width=True)
+
