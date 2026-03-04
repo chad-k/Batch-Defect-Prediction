@@ -309,10 +309,15 @@ mode = st.sidebar.radio(
     "Use:",
     ["Upload CSV", "Demo data"],
     index=0,
+    help="Upload your real data, or use a demo dataset to test the dashboard."
 )
 
 if mode == "Upload CSV":
-    uploaded = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+    uploaded = st.sidebar.file_uploader(
+        "Upload CSV",
+        type=["csv"],
+        help="Upload a CSV file. Column names can be anything—you will map them below."
+    )
     if not uploaded:
         st.info("Upload a CSV to continue.")
         st.stop()
@@ -352,9 +357,19 @@ all_cols = list(df.columns)
 # Grouping + timestamp
 # ----------------------------
 st.sidebar.header("Grouping")
-group_col = st.sidebar.selectbox("Group by (required)", options=all_cols, index=0)
+group_col = st.sidebar.selectbox(
+    "Group by (required)",
+    options=all_cols,
+    index=0,
+    help="This is the column that identifies the thing you want ONE point per group for (Batch, Lot, WorkOrder, etc.)."
+)
 
-time_col_choice = st.sidebar.selectbox("Timestamp (optional)", options=["—"] + all_cols, index=0)
+time_col_choice = st.sidebar.selectbox(
+    "Timestamp (optional)",
+    options=["—"] + all_cols,
+    index=0,
+    help="Optional. Used to order groups and (if enabled) compute 'last value' for parameters/traces."
+)
 time_col = None if time_col_choice == "—" else time_col_choice
 if time_col is not None:
     df[time_col] = safe_to_datetime(df[time_col])
@@ -375,16 +390,30 @@ groups_sorted = sorted(pd.Index(gkey.unique()).astype(str), key=lambda g: order_
 # Measurement mapping (manual)
 # ----------------------------
 st.sidebar.header("Subgroup Measurements")
-layout = st.sidebar.radio("Measurement layout", ["Long (one measurement column)", "Wide (multiple member columns)"], index=1)
+layout = st.sidebar.radio(
+    "Measurement layout",
+    ["Long (one measurement column)", "Wide (multiple member columns)"],
+    index=1,
+    help=(
+        "Long = one measurement column repeated across multiple rows per group.\n"
+        "Wide = multiple member columns (Sample1..SampleN, Cav1..CavN) that form a subgroup per group."
+    )
+)
 
 if layout == "Long (one measurement column)":
-    meas_col = st.sidebar.selectbox("Measurement column", options=all_cols, index=0)
+    meas_col = st.sidebar.selectbox(
+        "Measurement column",
+        options=all_cols,
+        index=0,
+        help="Select the measurement column for subgroup values. It can be named anything. We'll coerce it to numeric."
+    )
     member_cols = []
 else:
     member_cols = st.sidebar.multiselect(
         "Member columns (subgroup readings)",
         options=all_cols,
         default=all_cols[:5] if len(all_cols) >= 5 else all_cols,
+        help="Select the columns that contain subgroup members (e.g., Sample1..SampleN, Cav1..CavN). We'll coerce them to numeric."
     )
     if not member_cols:
         st.error("Select at least one subgroup member column.")
@@ -395,7 +424,7 @@ else:
 # Machine parameters / trace fields
 # ----------------------------
 st.sidebar.header("Machine parameters / Trace fields")
-st.sidebar.caption("Select numeric-ish process parameters/traces.")
+st.sidebar.caption("Select numeric-ish process parameters/traces (Temp, Pressure, Speed, Setpoints, Alarm flags, etc.). We'll coerce to numeric.")
 
 exclude = set(member_cols) if member_cols else set()
 if meas_col is not None:
@@ -405,16 +434,30 @@ if time_col is not None:
     exclude.add(time_col)
 
 param_candidates = [c for c in all_cols if c not in exclude]
-param_cols = st.sidebar.multiselect("Parameter/trace columns", options=param_candidates, default=[])
+param_cols = st.sidebar.multiselect(
+    "Parameter/trace columns (coerced to numeric)",
+    options=param_candidates,
+    default=[],
+    help="These will be aggregated per group (mean/std/min/max/range + optional last). Non-numeric values become NaN."
+)
 
-include_last = st.sidebar.checkbox("Include last value per group", value=False)
+include_last = st.sidebar.checkbox(
+    "Include last value per group (requires Timestamp)",
+    value=False,
+    help="Adds param__last per group using the last value by timestamp."
+)
 
 # ----------------------------
 # Categorical context
 # ----------------------------
 st.sidebar.header("Categorical context (optional)")
 cat_candidates = [c for c in all_cols if c not in {group_col, (time_col or "")}]
-context_cats = st.sidebar.multiselect("Categorical context columns", options=cat_candidates, default=[])
+context_cats = st.sidebar.multiselect(
+    "Categorical context columns",
+    options=cat_candidates,
+    default=[],
+    help="Optional context like Machine/Operator/Shift. We'll use the mode (most common value) within each group."
+)
 
 # ----------------------------
 # Build subgroup stats per group
@@ -512,12 +555,16 @@ spc["SPC_Flag"] = spc["Xbar_Flag"] | spc["S_Flag"]
 # Optional specs
 # ----------------------------
 st.sidebar.header("Specs (optional)")
-use_specs = st.sidebar.checkbox("Enable spec limits (Cp/Cpk/Ppk)", value=False)
+use_specs = st.sidebar.checkbox(
+    "Enable spec limits (Cp/Cpk/Ppk)",
+    value=False,
+    help="If you enter LSL/USL, the app will compute Cp/Cpk using within sigma and Pp/Ppk using overall sigma."
+)
 
 lsl = usl = None
 if use_specs:
-    lsl_txt = st.sidebar.text_input("LSL", "")
-    usl_txt = st.sidebar.text_input("USL", "")
+    lsl_txt = st.sidebar.text_input("LSL", "", help="Lower Spec Limit (numeric).")
+    usl_txt = st.sidebar.text_input("USL", "", help="Upper Spec Limit (numeric).")
     try:
         lsl = float(lsl_txt) if lsl_txt.strip() != "" else None
     except Exception:
@@ -590,7 +637,11 @@ st.sidebar.info(
 )
 
 # Allow manual override
-override_contamination = st.sidebar.checkbox("Override contamination rate?", value=False)
+override_contamination = st.sidebar.checkbox(
+    "Override contamination rate?",
+    value=False,
+    help="Enable this if you want to manually adjust the automatically-detected contamination rate."
+)
 if override_contamination:
     optimal_contamination = st.sidebar.slider(
         "Manual contamination rate",
@@ -598,7 +649,8 @@ if override_contamination:
         max_value=0.30,
         value=optimal_contamination,
         step=0.01,
-        format="%.2f"
+        format="%.2f",
+        help="Set the percentage of groups to flag as anomalies (2-30%). Lower = stricter, Higher = more sensitive."
     )
 
 # REFIT with optimal contamination
@@ -686,7 +738,11 @@ st.caption(f"""
 st.divider()
 st.subheader("Groups to Review (group-level)")
 
-top_n = st.slider("Show top N groups", 10, 300, 30)
+top_n = st.slider(
+    "Show top N groups",
+    10, 300, 30,
+    help="Shows the highest review priority groups (anomaly score + SPC bump)."
+)
 
 review_cols = [
     "Group", "n", "Xbar", "S", "R",
@@ -703,6 +759,7 @@ st.download_button(
     data=csv_bytes,
     file_name="group_level_anomaly_spc.csv",
     mime="text/csv",
+    help="Downloads the group-level table (one row per group) including SPC + anomaly results."
 )
 
 # ----------------------------
@@ -761,7 +818,11 @@ st.plotly_chart(fig_s, use_container_width=True)
 st.divider()
 st.subheader("Drill-down: raw rows for a selected group")
 
-chosen = st.selectbox(f"Select {group_col}", out["Group"].astype(str).unique())
+chosen = st.selectbox(
+    f"Select {group_col}",
+    out["Group"].astype(str).unique(),
+    help="Pick a group to see raw rows/values that formed the subgroup measurements and parameter traces."
+)
 
 left, right = st.columns([1.1, 1])
 
