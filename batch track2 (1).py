@@ -730,21 +730,21 @@ st.sidebar.info(
 )
 
 # Allow manual override
-override_contamination = st.sidebar.checkbox(
-    "Override contamination rate?",
-    value=False,
-    help="Enable this if you want to manually adjust the automatically-detected contamination rate."
-)
-if override_contamination:
-    optimal_contamination = st.sidebar.slider(
-        "Manual contamination rate",
-        min_value=0.02,
-        max_value=0.30,
-        value=optimal_contamination,
-        step=0.01,
-        format="%.2f",
-        help="Set the percentage of groups to flag as anomalies (2-30%). Lower = stricter, Higher = more sensitive."
-    )
+#override_contamination = st.sidebar.checkbox(
+#    "Override contamination rate?",
+#    value=False,
+#    help="Enable this if you want to manually adjust the automatically-detected contamination rate."
+#)
+#if override_contamination:
+#    optimal_contamination = st.sidebar.slider(
+#        "Manual contamination rate",
+#        min_value=0.02,
+#        max_value=0.30,
+#        value=optimal_contamination,
+#        step=0.01,
+#        format="%.2f",
+#        help="Set the percentage of groups to flag as anomalies (2-30%). Lower = stricter, Higher = more sensitive."
+#    )
 
 # REFIT with optimal contamination
 iso_final = IsolationForest(n_estimators=300, contamination=optimal_contamination, random_state=42)
@@ -1048,3 +1048,4 @@ if selected_group_data is not None:
             st.metric("S Value (set to 0 for n=1)", f"{selected_group_data['S']:.6f}")
 else:
     st.error("Could not find selected group in data")
+
